@@ -173,7 +173,7 @@ jobs:
         run: |
           mkdir -p apps
           wget -q https://github.com/webdriverio/native-demo-app/releases/download/v1.0.8/ios.simulator.wdio.native.app.v1.0.8.zip -P apps/
-          unzip -q -o apps/iOS-Simulator-NativeDemoApp-0.4.0.app.zip -d apps/
+          unzip -q -o apps/ios.simulator.wdio.native.app.v1.0.8.zip -d apps/
 
       - name: Setup iOS Simulator
         run: |
