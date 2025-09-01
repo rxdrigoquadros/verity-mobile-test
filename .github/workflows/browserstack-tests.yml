@@ -28,7 +28,7 @@ jobs:
       - name: Download app
         run: |
           mkdir -p apps
-          wget https://github.com/webdriverio/native-demo-app/releases/download/v1.0.8/Android-NativeDemoApp-0.4.0.apk -P apps/
+          wget https://github.com/webdriverio/native-demo-app/releases/download/v1.0.8/android.wdio.native.app.v1.0.8.apk -P apps/
 
       - name: Upload app to BrowserStack
         env:
