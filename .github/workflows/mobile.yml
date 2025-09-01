@@ -48,7 +48,7 @@ jobs:
       - name: Download Android app
         run: |
           mkdir -p apps
-          wget -q https://github.com/webdriverio/native-demo-app/releases/download/v1.0.8/Android-NativeDemoApp-0.4.0.apk -P apps/
+          wget -q https://github.com/webdriverio/native-demo-app/releases/download/v1.0.8/android.wdio.native.app.v1.0.8.apk -P apps/
 
       - name: Create test script
         run: |
@@ -172,7 +172,7 @@ jobs:
       - name: Download iOS app
         run: |
           mkdir -p apps
-          wget -q https://github.com/webdriverio/native-demo-app/releases/download/v1.0.8/iOS-Simulator-NativeDemoApp-0.4.0.app.zip -P apps/
+          wget -q https://github.com/webdriverio/native-demo-app/releases/download/v1.0.8/ios.simulator.wdio.native.app.v1.0.8.zip -P apps/
           unzip -q -o apps/iOS-Simulator-NativeDemoApp-0.4.0.app.zip -d apps/
 
       - name: Setup iOS Simulator

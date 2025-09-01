@@ -38,7 +38,7 @@ jobs:
           # Upload Android app
           response=$(curl -u "$BS_USERNAME:$BS_ACCESS_KEY" \
             -X POST "https://api-cloud.browserstack.com/app-automate/upload" \
-            -F "file=@apps/Android-NativeDemoApp-0.4.0.apk" \
+            -F "file=@apps/android.wdio.native.app.v1.0.8.apk" \
             -F "custom_id=NativeDemoApp")
           
           echo "BrowserStack upload response: $response"
