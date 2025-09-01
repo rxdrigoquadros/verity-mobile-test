@@ -29,4 +29,4 @@ appium driver install xcuitest      # iOS (apenas macOS)
 
 # Baixe o app de teste
 mkdir -p apps
-wget https://github.com/webdriverio/native-demo-app/releases/download/v1.0.8/Android-NativeDemoApp-0.4.0.apk -P apps/
+wget https://github.com/webdriverio/native-demo-app/releases/download/v1.0.8/android.wdio.native.app.v1.0.8.apk -P apps/
