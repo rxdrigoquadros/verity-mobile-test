@@ -1,0 +1,15 @@
+{
+  "validUser": {
+    "email": "test@example.com",
+    "password": "Test1234!"
+  },
+  "invalidUser": {
+    "email": "invalid@example.com",
+    "password": "wrong"
+  },
+  "formData": {
+    "name": "Test User",
+    "email": "user@test.com",
+    "age": "25"
+  }
+}

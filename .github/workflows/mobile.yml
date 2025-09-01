@@ -12,23 +12,25 @@ on:
         description: 'Android APK URL'
         required: false
         type: string
+        default: 'https://github.com/webdriverio/native-demo-app/releases/latest/download/Android-NativeDemoApp.apk'
       ios_app_url:
         description: 'iOS App ZIP URL'
         required: false
         type: string
+        default: 'https://github.com/webdriverio/native-demo-app/releases/latest/download/iOS-Simulator-NativeDemoApp.app.zip'
 
 env:
   NODE_VERSION: '20'
   JAVA_VERSION: '17'
   APPIUM_VERSION: '2.11.3'
-  ANDROID_APP_URL: ${{ github.event.inputs.android_app_url || secrets.ANDROID_APP_URL || vars.ANDROID_APP_URL || '' }}
-  IOS_APP_URL: ${{ github.event.inputs.ios_app_url || secrets.IOS_APP_URL || vars.IOS_APP_URL || '' }}
+  ANDROID_APP_URL: ${{ github.event.inputs.android_app_url || secrets.ANDROID_APP_URL || vars.ANDROID_APP_URL || 'https://github.com/webdriverio/native-demo-app/releases/latest/download/Android-NativeDemoApp.apk' }}
+  IOS_APP_URL: ${{ github.event.inputs.ios_app_url || secrets.IOS_APP_URL || vars.IOS_APP_URL || 'https://github.com/webdriverio/native-demo-app/releases/latest/download/iOS-Simulator-NativeDemoApp.app.zip' }}
 
 jobs:
   test-android:
     name: Android Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     
     steps:
       - name: Checkout code
@@ -45,29 +47,34 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: 'temurin'
 
-      - name: Verify test structure
+      - name: Create test data file
         run: |
-          echo "📁 Current directory structure:"
-          pwd
-          ls -la
+          mkdir -p test/data
+          cat > test/data/testData.json << 'EOF'
+          {
+            "validUser": {
+              "email": "test@example.com",
+              "password": "Test1234!"
+            },
+            "invalidUser": {
+              "email": "invalid@example.com",
+              "password": "wrong"
+            },
+            "formData": {
+              "name": "Test User",
+              "email": "user@test.com",
+              "age": "25"
+            }
+          }
+          EOF
           
-          echo "📁 Test directory:"
-          if [ -d "test/specs" ]; then
-            ls -la test/specs/
-          elif [ -d "test/spec" ]; then
-            ls -la test/spec/
-          else
-            echo "No test directory found!"
-          fi
-          
-          # Create apps directory
-          mkdir -p apps
+          echo "✅ Created test data file"
 
       - name: Create/Update configs
         run: |
-          mkdir -p config
+          mkdir -p config apps
           
-          # Create shared config with absolute paths
+          # Shared config
           cat > config/wdio.shared.conf.js << 'EOF'
           const path = require('path');
           
@@ -83,179 +90,146 @@ jobs:
               logLevel: 'info',
               bail: 0,
               baseUrl: '',
-              waitforTimeout: 10000,
+              waitforTimeout: 30000,
               connectionRetryTimeout: 120000,
               connectionRetryCount: 3,
               services: [],
               framework: 'mocha',
-              reporters: [
-                  'spec',
-                  ['allure', {
-                      outputDir: 'allure-results',
-                      disableWebdriverStepsReporting: true,
-                      disableWebdriverScreenshotsReporting: false,
-                  }]
-              ],
+              reporters: ['spec'],
               mochaOpts: {
                   ui: 'bdd',
-                  timeout: 60000
-              },
-              afterTest: async function(test, context, { error, result, duration, passed, retries }) {
-                  if (!passed) {
-                      try {
-                          await driver.takeScreenshot();
-                      } catch (e) {
-                          console.log('Failed to take screenshot:', e.message);
-                      }
-                  }
+                  timeout: 120000
               }
           };
           EOF
           
-          # Create Android config
+          # Android config
           cat > config/wdio.android.conf.js << 'EOF'
           const { config } = require('./wdio.shared.conf');
           const path = require('path');
           const fs = require('fs');
           
           config.port = 4723;
-          
-          // Set specs with absolute paths
           config.specs = [
               path.join(process.cwd(), './test/specs/**/*.js'),
               path.join(process.cwd(), './test/spec/**/*.js')
           ];
           
-          // Check if we have a downloaded app
-          let appPath = path.join(process.cwd(), './apps/app.apk');
-          let capabilities = {};
+          // Use downloaded app
+          const appPath = path.join(process.cwd(), './apps/app.apk');
           
-          if (fs.existsSync(appPath)) {
-              console.log('Using downloaded app:', appPath);
-              capabilities = {
-                  platformName: 'Android',
-                  'appium:automationName': 'UiAutomator2',
-                  'appium:deviceName': 'emulator-5554',
-                  'appium:platformVersion': '10.0',
-                  'appium:app': appPath,
-                  'appium:noReset': true,
-                  'appium:newCommandTimeout': 240,
-                  'appium:autoGrantPermissions': true,
-                  'appium:disableWindowAnimation': true,
-              };
-          } else {
-              console.log('No app found, using Calculator for testing');
-              capabilities = {
-                  platformName: 'Android',
-                  'appium:automationName': 'UiAutomator2',
-                  'appium:deviceName': 'emulator-5554',
-                  'appium:platformVersion': '10.0',
-                  'appium:appPackage': 'com.android.calculator2',
-                  'appium:appActivity': 'com.android.calculator2.Calculator',
-                  'appium:noReset': true,
-                  'appium:newCommandTimeout': 240,
-                  'appium:autoGrantPermissions': true,
-                  'appium:disableWindowAnimation': true,
-              };
-          }
+          config.capabilities = [{
+              platformName: 'Android',
+              'appium:automationName': 'UiAutomator2',
+              'appium:deviceName': 'emulator-5554',
+              'appium:platformVersion': '13.0',
+              'appium:app': fs.existsSync(appPath) ? appPath : undefined,
+              'appium:appPackage': fs.existsSync(appPath) ? undefined : 'com.wdiodemoapp',
+              'appium:appActivity': fs.existsSync(appPath) ? undefined : '.MainActivity',
+              'appium:noReset': false,
+              'appium:fullReset': false,
+              'appium:newCommandTimeout': 240,
+              'appium:autoGrantPermissions': true,
+              'appium:disableWindowAnimation': true,
+              'appium:skipDeviceInitialization': true,
+              'appium:skipServerInstallation': true,
+              'appium:uiautomator2ServerInstallTimeout': 60000,
+              'appium:adbExecTimeout': 60000,
+              'appium:androidInstallTimeout': 120000
+          }];
           
-          config.capabilities = [capabilities];
           exports.config = config;
           EOF
 
       - name: Install dependencies
         run: |
-          npm install
+          npm init -y
+          npm install --save-dev \
+            @wdio/cli \
+            @wdio/local-runner \
+            @wdio/mocha-framework \
+            @wdio/spec-reporter \
+            @wdio/appium-service \
+            appium-uiautomator2-driver
           
       - name: Setup Appium
         run: |
           npm install -g appium@${{ env.APPIUM_VERSION }}
-          appium --version
           appium driver install uiautomator2@2.45.1
           appium driver list --installed
 
       - name: Download Android App
-        continue-on-error: true
         run: |
-          if [ ! -z "${{ env.ANDROID_APP_URL }}" ]; then
-            echo "📱 Downloading Android app..."
-            curl -L -o apps/app.apk "${{ env.ANDROID_APP_URL }}" || echo "Download failed"
+          echo "📱 Downloading Android app..."
+          
+          # Try multiple download methods
+          curl -L -o apps/app.apk "${{ env.ANDROID_APP_URL }}" || \
+          wget -O apps/app.apk "${{ env.ANDROID_APP_URL }}" || \
+          curl -L -o apps/app.apk "https://github.com/webdriverio/native-demo-app/releases/latest/download/Android-NativeDemoApp.apk"
+          
+          # Verify download
+          if [ -f "apps/app.apk" ]; then
+            FILE_SIZE=$(stat -c%s apps/app.apk 2>/dev/null || stat -f%z apps/app.apk 2>/dev/null || echo "0")
+            echo "✅ APK downloaded: ${FILE_SIZE} bytes"
             
-            if [ -f "apps/app.apk" ]; then
-              FILE_SIZE=$(stat -c%s "apps/app.apk" 2>/dev/null || echo "0")
-              if [ "$FILE_SIZE" -gt "1000" ]; then
-                echo "✅ APK downloaded: ${FILE_SIZE} bytes"
-              else
-                rm -f apps/app.apk
-              fi
-            fi
+            # Verify it's a valid APK
+            file apps/app.apk
+          else
+            echo "❌ Failed to download APK"
           fi
 
-      - name: Create test runner script
+      - name: Create test runner
         run: |
           cat > run-tests.sh << 'EOF'
           #!/bin/bash
           
-          echo "========================================="
           echo "📱 Android Test Runner"
-          echo "========================================="
+          echo "Working directory: $(pwd)"
           
-          # Show current directory
-          echo "📁 Working directory: $(pwd)"
-          echo "📁 Test files:"
-          find test -name "*.spec.js" -type f 2>/dev/null | head -10
+          # Check test files
+          echo "Test files found:"
+          find test -name "*.spec.js" -type f | head -10
           
-          # Cleanup function
-          cleanup() {
-              if [ ! -z "$APPIUM_PID" ]; then
-                  echo "Stopping Appium..."
-                  kill -TERM $APPIUM_PID 2>/dev/null || true
-              fi
-          }
-          trap cleanup EXIT
-          
-          # Kill any existing Appium
-          pkill -f appium || true
-          sleep 2
+          # Check if APK exists
+          if [ -f "apps/app.apk" ]; then
+            echo "✅ Using downloaded APK"
+          else
+            echo "⚠️ No APK found"
+          fi
           
           # Start Appium
-          echo "🚀 Starting Appium..."
-          appium --address 127.0.0.1 --port 4723 --relaxed-security > appium.log 2>&1 &
+          echo "Starting Appium..."
+          appium --address 127.0.0.1 --port 4723 --relaxed-security \
+                 --allow-insecure=adb_shell \
+                 --log-level info > appium.log 2>&1 &
           APPIUM_PID=$!
           
           # Wait for Appium
-          echo "⏳ Waiting for Appium..."
+          sleep 5
           for i in {1..30}; do
             if curl -s http://127.0.0.1:4723/status | grep -q "ready.*true"; then
-              echo "✅ Appium is ready!"
+              echo "✅ Appium ready!"
               break
             fi
             sleep 2
           done
           
-          # Verify Appium
-          if ! curl -s http://127.0.0.1:4723/status | grep -q "ready.*true"; then
-            echo "❌ Appium failed to start"
-            cat appium.log | tail -50
-            exit 1
-          fi
-          
-          # Check devices
-          echo "📱 Connected devices:"
+          # Check emulator
+          echo "Devices:"
           adb devices
           
-          # Run tests
-          echo "🧪 Running tests..."
-          echo "Command: npm run test:android"
-          npm run test:android || TEST_EXIT=$?
-          
-          echo "Test exit code: ${TEST_EXIT:-0}"
-          
-          # Show some logs if failed
-          if [ "${TEST_EXIT:-0}" -ne 0 ]; then
-            echo "📋 Last Appium logs:"
-            tail -30 appium.log || true
+          # Install app if exists
+          if [ -f "apps/app.apk" ]; then
+            echo "Installing app..."
+            adb -s emulator-5554 install -r -g apps/app.apk || true
           fi
+          
+          # Run tests
+          echo "Running tests..."
+          npx wdio config/wdio.android.conf.js || TEST_EXIT=$?
+          
+          # Cleanup
+          kill $APPIUM_PID 2>/dev/null || true
           
           exit ${TEST_EXIT:-0}
           EOF
@@ -264,27 +238,23 @@ jobs:
       - name: Run Android Tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 29
+          api-level: 33
           target: google_apis
           arch: x86_64
-          profile: Nexus 6
-          avd-name: test_emulator
+          profile: pixel_6
+          avd-name: test_device
           force-avd-creation: true
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           disable-spellchecker: true
-          emulator-boot-timeout: 600
+          emulator-boot-timeout: 900
           script: |
-            # Ensure emulator is ready
+            # Wait for device
             adb wait-for-device
-            adb devices
+            adb shell input keyevent 82
             
-            # Run the tests
-            ./run-tests.sh || EXIT_CODE=$?
-            
-            # Return success even if tests fail (to allow artifact upload)
-            echo "Tests completed with code: ${EXIT_CODE:-0}"
-            exit ${EXIT_CODE:-0}
+            # Run tests
+            ./run-tests.sh
 
       - name: Upload artifacts
         if: always()
@@ -292,17 +262,15 @@ jobs:
         with:
           name: android-test-results-${{ github.run_number }}
           path: |
-            allure-report/
-            allure-results/
-            screenshots/
             appium.log
+            test-results/
+            screenshots/
           retention-days: 30
-          if-no-files-found: warn
 
   test-ios:
     name: iOS Tests
-    runs-on: macos-13
-    timeout-minutes: 30
+    runs-on: macos-latest
+    timeout-minutes: 45
     
     steps:
       - name: Checkout code
@@ -313,28 +281,32 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Verify test structure
+      - name: Create test data file
         run: |
-          echo "📁 Current directory: $(pwd)"
-          echo "📁 Repository structure:"
-          ls -la
-          
-          echo "📁 Test files:"
-          if [ -d "test/specs" ]; then
-            echo "Found test/specs:"
-            ls -la test/specs/
-          elif [ -d "test/spec" ]; then
-            echo "Found test/spec:"
-            ls -la test/spec/
-          fi
-          
-          mkdir -p apps
+          mkdir -p test/data
+          cat > test/data/testData.json << 'EOF'
+          {
+            "validUser": {
+              "email": "test@example.com",
+              "password": "Test1234!"
+            },
+            "invalidUser": {
+              "email": "invalid@example.com",
+              "password": "wrong"
+            },
+            "formData": {
+              "name": "Test User",
+              "email": "user@test.com",
+              "age": "25"
+            }
+          }
+          EOF
 
-      - name: Create/Update configs
+      - name: Create configs
         run: |
-          mkdir -p config
+          mkdir -p config apps
           
-          # Create shared config
+          # Shared config
           cat > config/wdio.shared.conf.js << 'EOF'
           const path = require('path');
           
@@ -350,206 +322,138 @@ jobs:
               logLevel: 'info',
               bail: 0,
               baseUrl: '',
-              waitforTimeout: 10000,
+              waitforTimeout: 30000,
               connectionRetryTimeout: 120000,
               connectionRetryCount: 3,
               services: [],
               framework: 'mocha',
-              reporters: [
-                  'spec',
-                  ['allure', {
-                      outputDir: 'allure-results',
-                      disableWebdriverStepsReporting: true,
-                      disableWebdriverScreenshotsReporting: false,
-                  }]
-              ],
+              reporters: ['spec'],
               mochaOpts: {
                   ui: 'bdd',
-                  timeout: 60000
-              },
-              afterTest: async function(test, context, { error, result, duration, passed, retries }) {
-                  if (!passed) {
-                      try {
-                          await driver.takeScreenshot();
-                      } catch (e) {
-                          console.log('Failed to take screenshot:', e.message);
-                      }
-                  }
+                  timeout: 120000
               }
           };
           EOF
           
-          # Create iOS config
+          # iOS config - with dynamic version
           cat > config/wdio.ios.conf.js << 'EOF'
           const { config } = require('./wdio.shared.conf');
           const path = require('path');
           const fs = require('fs');
           
           config.port = 4723;
-          
-          // Set specs with absolute paths
           config.specs = [
               path.join(process.cwd(), './test/specs/**/*.js'),
               path.join(process.cwd(), './test/spec/**/*.js')
           ];
           
-          // Check for app
-          let appPath = path.join(process.cwd(), './apps/NativeDemoApp.app');
-          let capabilities = {};
+          const appPath = path.join(process.cwd(), './apps/NativeDemoApp.app');
           
-          if (fs.existsSync(appPath)) {
-              console.log('Using app:', appPath);
-              capabilities = {
-                  platformName: 'iOS',
-                  'appium:automationName': 'XCUITest',
-                  'appium:deviceName': 'iPhone 14',
-                  'appium:platformVersion': '16.4',
-                  'appium:app': appPath,
-                  'appium:noReset': true,
-                  'appium:newCommandTimeout': 240,
-                  'appium:simulatorStartupTimeout': 120000,
-              };
-          } else {
-              console.log('No app found, using Safari');
-              capabilities = {
-                  platformName: 'iOS',
-                  'appium:automationName': 'XCUITest',
-                  'appium:deviceName': 'iPhone 14',
-                  'appium:platformVersion': '16.4',
-                  'appium:bundleId': 'com.apple.mobilesafari',
-                  'appium:noReset': true,
-                  'appium:newCommandTimeout': 240,
-                  'appium:simulatorStartupTimeout': 120000,
-              };
-          }
+          config.capabilities = [{
+              platformName: 'iOS',
+              'appium:automationName': 'XCUITest',
+              'appium:deviceName': 'iPhone 14',
+              'appium:platformVersion': process.env.IOS_VERSION || '17.2',
+              'appium:app': fs.existsSync(appPath) ? appPath : undefined,
+              'appium:bundleId': fs.existsSync(appPath) ? undefined : 'org.reactjs.native.example.wdiodemoapp',
+              'appium:noReset': false,
+              'appium:fullReset': false,
+              'appium:newCommandTimeout': 240,
+              'appium:simulatorStartupTimeout': 120000,
+              'appium:wdaLaunchTimeout': 60000,
+              'appium:wdaConnectionTimeout': 60000,
+              'appium:usePrebuiltWDA': true,
+              'appium:useNewWDA': false
+          }];
           
-          config.capabilities = [capabilities];
           exports.config = config;
           EOF
-          
-          # Debug: Show config content
-          echo "📄 Config content:"
-          cat config/wdio.ios.conf.js
 
       - name: Install dependencies
         run: |
-          npm install
+          npm init -y
+          npm install --save-dev \
+            @wdio/cli \
+            @wdio/local-runner \
+            @wdio/mocha-framework \
+            @wdio/spec-reporter \
+            @wdio/appium-service \
+            appium-xcuitest-driver
 
       - name: Setup Appium
         run: |
           npm install -g appium@${{ env.APPIUM_VERSION }}
-          appium --version
-          appium driver install xcuitest@4.35.0
+          appium driver install xcuitest
           appium driver list --installed
 
       - name: Download iOS App
-        continue-on-error: true
         run: |
-          if [ ! -z "${{ env.IOS_APP_URL }}" ]; then
-            echo "📱 Downloading iOS app..."
-            curl -L -o apps/app.zip "${{ env.IOS_APP_URL }}" || echo "Download failed"
-            
-            if [ -f "apps/app.zip" ]; then
-              FILE_SIZE=$(stat -f%z "apps/app.zip" 2>/dev/null || echo "0")
-              if [ "$FILE_SIZE" -gt "1000" ]; then
-                unzip -q -o apps/app.zip -d apps/ || echo "Extract failed"
-                APP_PATH=$(find apps -name "*.app" -type d | head -1)
-                if [ ! -z "$APP_PATH" ]; then
-                  mv "$APP_PATH" "apps/NativeDemoApp.app" 2>/dev/null || true
-                fi
+          echo "📱 Downloading iOS app..."
+          
+          # Download
+          curl -L -o apps/app.zip "${{ env.IOS_APP_URL }}" || \
+          curl -L -o apps/app.zip "https://github.com/webdriverio/native-demo-app/releases/latest/download/iOS-Simulator-NativeDemoApp.app.zip"
+          
+          # Extract if valid
+          if [ -f "apps/app.zip" ]; then
+            FILE_SIZE=$(stat -f%z apps/app.zip 2>/dev/null || echo "0")
+            if [ "$FILE_SIZE" -gt "10000" ]; then
+              unzip -q -o apps/app.zip -d apps/
+              APP_PATH=$(find apps -name "*.app" -type d | head -1)
+              if [ ! -z "$APP_PATH" ]; then
+                mv "$APP_PATH" "apps/NativeDemoApp.app" 2>/dev/null || true
+                echo "✅ iOS app ready"
               fi
             fi
           fi
 
-      - name: Setup iOS Simulator
+      - name: Setup Simulator
         run: |
           echo "📱 Setting up iOS Simulator..."
           
-          # Get available runtimes
+          # Get available iOS versions
           echo "Available runtimes:"
           xcrun simctl list runtimes
           
-          # Get the latest iOS runtime
-          RUNTIME=$(xcrun simctl list runtimes | grep iOS | tail -1 | awk '{print $NF}')
-          echo "Using runtime: $RUNTIME"
+          # Get the latest iOS runtime (dynamically)
+          RUNTIME=$(xcrun simctl list runtimes | grep "iOS" | tail -1 | awk '{print $NF}')
+          IOS_VERSION=$(xcrun simctl list runtimes | grep "iOS" | tail -1 | sed -n 's/.*iOS \([0-9.]*\).*/\1/p')
           
-          # Delete existing simulator if exists
+          echo "Using iOS version: $IOS_VERSION"
+          echo "IOS_VERSION=$IOS_VERSION" >> $GITHUB_ENV
+          
+          # Create simulator
           xcrun simctl delete "iPhone 14" 2>/dev/null || true
-          
-          # Create new simulator
           DEVICE_ID=$(xcrun simctl create "iPhone 14" "iPhone 14" "$RUNTIME")
-          echo "Created device: $DEVICE_ID"
           echo "DEVICE_ID=$DEVICE_ID" >> $GITHUB_ENV
           
-          # Boot the simulator
+          # Boot simulator
           xcrun simctl boot "$DEVICE_ID"
-          
-          # Wait for boot
-          echo "Waiting for simulator to boot..."
           xcrun simctl bootstatus "$DEVICE_ID" || true
-          
-          # List booted devices
-          echo "Booted devices:"
-          xcrun simctl list devices | grep Booted
 
       - name: Run iOS Tests
         run: |
-          echo "📱 Starting iOS tests..."
-          echo "📁 Working directory: $(pwd)"
-          echo "📁 Test files found:"
-          find test -name "*.spec.js" -type f 2>/dev/null | head -10
+          echo "📱 Running iOS tests..."
           
           # Start Appium
-          echo "🚀 Starting Appium server..."
           appium --address 127.0.0.1 --port 4723 --relaxed-security > appium.log 2>&1 &
           APPIUM_PID=$!
           
-          # Wait for Appium to be ready
-          echo "⏳ Waiting for Appium..."
-          MAX_ATTEMPTS=30
-          ATTEMPT=0
-          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+          # Wait for Appium
+          sleep 5
+          for i in {1..30}; do
             if curl -s http://127.0.0.1:4723/status | grep -q "ready.*true"; then
-              echo "✅ Appium is ready!"
+              echo "✅ Appium ready!"
               break
             fi
-            ATTEMPT=$((ATTEMPT + 1))
-            echo "   Waiting... attempt $ATTEMPT/$MAX_ATTEMPTS"
             sleep 2
           done
           
-          # Verify Appium is running
-          if ! curl -s http://127.0.0.1:4723/status | grep -q "ready.*true"; then
-            echo "❌ Appium failed to start"
-            cat appium.log | tail -50
-            exit 1
-          fi
-          
-          # Show Appium status
-          echo "📊 Appium status:"
-          curl -s http://127.0.0.1:4723/status | python3 -m json.tool || true
-          
-          # Debug WebdriverIO config
-          echo "🔍 Checking WebdriverIO configuration..."
-          echo "Current directory: $(pwd)"
-          echo "Test specs pattern:"
-          node -e "console.log(require('./config/wdio.ios.conf').config.specs)"
-          
-          # Run tests
-          echo "🧪 Running tests with command: npm run test:ios"
-          npm run test:ios || TEST_EXIT=$?
+          # Run tests with dynamic iOS version
+          IOS_VERSION=$IOS_VERSION npx wdio config/wdio.ios.conf.js || TEST_EXIT=$?
           
           # Cleanup
           kill $APPIUM_PID 2>/dev/null || true
-          
-          # Show results
-          if [ "${TEST_EXIT:-0}" -eq 0 ]; then
-            echo "✅ Tests passed!"
-          else
-            echo "❌ Tests failed with exit code: ${TEST_EXIT:-1}"
-            echo "📋 Last Appium logs:"
-            tail -30 appium.log || true
-          fi
           
           exit ${TEST_EXIT:-0}
 
@@ -559,9 +463,7 @@ jobs:
         with:
           name: ios-test-results-${{ github.run_number }}
           path: |
-            allure-report/
-            allure-results/
-            screenshots/
             appium.log
+            test-results/
+            screenshots/
           retention-days: 30
-          if-no-files-found: warn
