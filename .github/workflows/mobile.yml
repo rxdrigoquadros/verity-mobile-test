@@ -21,7 +21,6 @@ env:
   NODE_VERSION: '20'
   JAVA_VERSION: '17'
   APPIUM_VERSION: '2.11.3'
-  # URLs dos apps - Configure via Secrets ou Variables
   ANDROID_APP_URL: ${{ github.event.inputs.android_app_url || secrets.ANDROID_APP_URL || vars.ANDROID_APP_URL || '' }}
   IOS_APP_URL: ${{ github.event.inputs.ios_app_url || secrets.IOS_APP_URL || vars.IOS_APP_URL || '' }}
 
@@ -46,54 +45,38 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: 'temurin'
 
-      - name: Check and prepare test structure
+      - name: Verify test structure
         run: |
-          echo "📁 Checking existing test structure..."
+          echo "📁 Current directory structure:"
+          pwd
+          ls -la
           
-          # Create necessary directories if they don't exist
-          mkdir -p apps config
-          
-          # Check which directory has the tests
-          if [ -d "test/spec" ] && [ "$(ls -A test/spec/*.js 2>/dev/null)" ]; then
-            echo "✅ Found tests in test/spec/"
-            ls -la test/spec/
-            TEST_DIR="test/spec"
-          elif [ -d "test/specs" ] && [ "$(ls -A test/specs/*.js 2>/dev/null)" ]; then
-            echo "✅ Found tests in test/specs/"
+          echo "📁 Test directory:"
+          if [ -d "test/specs" ]; then
             ls -la test/specs/
-            TEST_DIR="test/specs"
+          elif [ -d "test/spec" ]; then
+            ls -la test/spec/
           else
-            echo "⚠️ No tests found, creating basic test..."
-            mkdir -p test/specs
-            TEST_DIR="test/specs"
-            
-            # Create a basic test only if no tests exist
-            cat > test/specs/00.basic.spec.js << 'EOF'
-          describe('Basic Android Tests', () => {
-              it('should create a session', async () => {
-                  const sessionId = await driver.getSessionId();
-                  console.log('Session ID:', sessionId);
-                  expect(sessionId).toBeDefined();
-              });
-              
-              it('should verify platform', async () => {
-                  const platform = await driver.getPlatformName();
-                  console.log('Platform:', platform);
-                  expect(platform.toLowerCase()).toBe('android');
-              });
-          });
-          EOF
+            echo "No test directory found!"
           fi
           
-          echo "TEST_DIR=$TEST_DIR" >> $GITHUB_ENV
+          # Create apps directory
+          mkdir -p apps
+
+      - name: Create/Update configs
+        run: |
+          mkdir -p config
           
-          # Check if configs exist, if not create them
-          if [ ! -f "config/wdio.shared.conf.js" ]; then
-            echo "📝 Creating shared config..."
-            cat > config/wdio.shared.conf.js << EOF
+          # Create shared config with absolute paths
+          cat > config/wdio.shared.conf.js << 'EOF'
+          const path = require('path');
+          
           exports.config = {
               runner: 'local',
-              specs: ['./${TEST_DIR}/**/*.js'],
+              specs: [
+                  path.join(process.cwd(), './test/specs/**/*.js'),
+                  path.join(process.cwd(), './test/spec/**/*.js')
+              ],
               exclude: [],
               maxInstances: 1,
               capabilities: [],
@@ -119,22 +102,29 @@ jobs:
               },
               afterTest: async function(test, context, { error, result, duration, passed, retries }) {
                   if (!passed) {
-                      await driver.takeScreenshot();
+                      try {
+                          await driver.takeScreenshot();
+                      } catch (e) {
+                          console.log('Failed to take screenshot:', e.message);
+                      }
                   }
               }
           };
           EOF
-          fi
           
-          if [ ! -f "config/wdio.android.conf.js" ]; then
-            echo "📝 Creating Android config..."
-            cat > config/wdio.android.conf.js << EOF
+          # Create Android config
+          cat > config/wdio.android.conf.js << 'EOF'
           const { config } = require('./wdio.shared.conf');
           const path = require('path');
           const fs = require('fs');
           
           config.port = 4723;
-          config.specs = ['${TEST_DIR}/**/*.js'];
+          
+          // Set specs with absolute paths
+          config.specs = [
+              path.join(process.cwd(), './test/specs/**/*.js'),
+              path.join(process.cwd(), './test/spec/**/*.js')
+          ];
           
           // Check if we have a downloaded app
           let appPath = path.join(process.cwd(), './apps/app.apk');
@@ -150,6 +140,8 @@ jobs:
                   'appium:app': appPath,
                   'appium:noReset': true,
                   'appium:newCommandTimeout': 240,
+                  'appium:autoGrantPermissions': true,
+                  'appium:disableWindowAnimation': true,
               };
           } else {
               console.log('No app found, using Calculator for testing');
@@ -162,27 +154,17 @@ jobs:
                   'appium:appActivity': 'com.android.calculator2.Calculator',
                   'appium:noReset': true,
                   'appium:newCommandTimeout': 240,
+                  'appium:autoGrantPermissions': true,
+                  'appium:disableWindowAnimation': true,
               };
           }
           
           config.capabilities = [capabilities];
           exports.config = config;
           EOF
-          fi
-          
-          # Show final test structure
-          echo "📁 Final test structure:"
-          echo "Test directory: $TEST_DIR"
-          ls -la $TEST_DIR/ || echo "No test files found"
-          echo "Config files:"
-          ls -la config/
 
       - name: Install dependencies
         run: |
-          # Don't remove existing node_modules if package-lock exists
-          if [ ! -f "package-lock.json" ]; then
-            rm -rf node_modules
-          fi
           npm install
           
       - name: Setup Appium
@@ -196,128 +178,90 @@ jobs:
         continue-on-error: true
         run: |
           if [ ! -z "${{ env.ANDROID_APP_URL }}" ]; then
-            echo "📱 Downloading Android app from: ${{ env.ANDROID_APP_URL }}"
+            echo "📱 Downloading Android app..."
+            curl -L -o apps/app.apk "${{ env.ANDROID_APP_URL }}" || echo "Download failed"
             
-            curl -L -f -o apps/app.apk "${{ env.ANDROID_APP_URL }}" || {
-              echo "⚠️ Failed to download APK"
-              rm -f apps/app.apk
-            }
-            
-            # Verify the download
             if [ -f "apps/app.apk" ]; then
-              FILE_SIZE=$(stat -c%s "apps/app.apk" 2>/dev/null || stat -f%z "apps/app.apk" 2>/dev/null || echo "0")
-              echo "Downloaded file size: $FILE_SIZE bytes"
-              
+              FILE_SIZE=$(stat -c%s "apps/app.apk" 2>/dev/null || echo "0")
               if [ "$FILE_SIZE" -gt "1000" ]; then
-                echo "✅ APK downloaded successfully"
+                echo "✅ APK downloaded: ${FILE_SIZE} bytes"
               else
-                echo "⚠️ Downloaded file is too small, removing..."
                 rm -f apps/app.apk
               fi
             fi
-          else
-            echo "⚠️ No Android app URL configured"
-            echo "📱 Tests will run with Calculator app"
           fi
 
-      - name: Create Android test runner
+      - name: Create test runner script
         run: |
-          cat > run-android-tests.sh << 'EOF'
+          cat > run-tests.sh << 'EOF'
           #!/bin/bash
-          set -e
           
           echo "========================================="
           echo "📱 Android Test Runner"
           echo "========================================="
           
-          # Show test files
-          echo "📋 Test files to run:"
-          find ${TEST_DIR:-test/specs} -name "*.js" -type f 2>/dev/null | sort || echo "No test files found"
+          # Show current directory
+          echo "📁 Working directory: $(pwd)"
+          echo "📁 Test files:"
+          find test -name "*.spec.js" -type f 2>/dev/null | head -10
           
-          # Function to cleanup
+          # Cleanup function
           cleanup() {
-              echo "🧹 Cleaning up..."
               if [ ! -z "$APPIUM_PID" ]; then
+                  echo "Stopping Appium..."
                   kill -TERM $APPIUM_PID 2>/dev/null || true
-                  sleep 2
-                  kill -KILL $APPIUM_PID 2>/dev/null || true
               fi
           }
+          trap cleanup EXIT
           
-          # Set trap for cleanup
-          trap cleanup EXIT INT TERM
-          
-          # Kill any existing Appium processes
+          # Kill any existing Appium
           pkill -f appium || true
+          sleep 2
           
           # Start Appium
-          echo "🚀 Starting Appium server..."
-          appium --address 127.0.0.1 \
-                 --port 4723 \
-                 --relaxed-security \
-                 --log-level info > appium.log 2>&1 &
+          echo "🚀 Starting Appium..."
+          appium --address 127.0.0.1 --port 4723 --relaxed-security > appium.log 2>&1 &
           APPIUM_PID=$!
-          echo "Appium PID: $APPIUM_PID"
           
-          # Wait for Appium to be ready
-          echo "⏳ Waiting for Appium to start..."
-          TIMEOUT=60
-          ELAPSED=0
-          while [ $ELAPSED -lt $TIMEOUT ]; do
-            if curl -s http://127.0.0.1:4723/status | grep -q '"ready":true'; then
+          # Wait for Appium
+          echo "⏳ Waiting for Appium..."
+          for i in {1..30}; do
+            if curl -s http://127.0.0.1:4723/status | grep -q "ready.*true"; then
               echo "✅ Appium is ready!"
               break
             fi
             sleep 2
-            ELAPSED=$((ELAPSED + 2))
-            echo "   Waiting... ${ELAPSED}s/${TIMEOUT}s"
           done
           
-          # Verify Appium is running
-          if ! curl -s http://127.0.0.1:4723/status | grep -q '"ready":true'; then
+          # Verify Appium
+          if ! curl -s http://127.0.0.1:4723/status | grep -q "ready.*true"; then
             echo "❌ Appium failed to start"
-            echo "Appium log:"
-            cat appium.log
+            cat appium.log | tail -50
             exit 1
           fi
           
-          # Show Appium status
-          echo "📊 Appium server status:"
-          curl -s http://127.0.0.1:4723/status | python3 -m json.tool || true
-          
-          # Check connected devices
-          echo "📱 Connected Android devices:"
+          # Check devices
+          echo "📱 Connected devices:"
           adb devices
           
-          # Install app if exists
-          if [ -f "apps/app.apk" ]; then
-            echo "📦 Installing app on emulator..."
-            adb -s emulator-5554 install -r apps/app.apk || echo "⚠️ App installation failed"
-          fi
-          
-          # Give emulator time to stabilize
-          sleep 3
-          
           # Run tests
-          echo "🧪 Starting test execution..."
+          echo "🧪 Running tests..."
+          echo "Command: npm run test:android"
           npm run test:android || TEST_EXIT=$?
           
-          # Show results
-          if [ "${TEST_EXIT:-0}" -eq 0 ]; then
-            echo "✅ All tests passed!"
-          else
-            echo "❌ Tests failed with exit code: ${TEST_EXIT:-1}"
-            echo "📋 Appium log (last 50 lines):"
-            tail -50 appium.log || true
+          echo "Test exit code: ${TEST_EXIT:-0}"
+          
+          # Show some logs if failed
+          if [ "${TEST_EXIT:-0}" -ne 0 ]; then
+            echo "📋 Last Appium logs:"
+            tail -30 appium.log || true
           fi
           
           exit ${TEST_EXIT:-0}
           EOF
-          
-          chmod +x run-android-tests.sh
-          echo "✅ Test runner script created"
+          chmod +x run-tests.sh
 
-      - name: Run Android Tests with Emulator
+      - name: Run Android Tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 29
@@ -331,41 +275,27 @@ jobs:
           disable-spellchecker: true
           emulator-boot-timeout: 600
           script: |
-            echo "✅ Emulator ready!"
-            echo "📱 Checking ADB connection:"
+            # Ensure emulator is ready
+            adb wait-for-device
             adb devices
-            echo "📊 Device info:"
-            adb shell getprop ro.build.version.release || true
             
-            # Export TEST_DIR for the script
-            export TEST_DIR="${TEST_DIR:-test/specs}"
+            # Run the tests
+            ./run-tests.sh || EXIT_CODE=$?
             
-            # Execute tests
-            ./run-android-tests.sh
+            # Return success even if tests fail (to allow artifact upload)
+            echo "Tests completed with code: ${EXIT_CODE:-0}"
+            exit ${EXIT_CODE:-0}
 
-      - name: Generate Allure Report
-        if: always()
-        run: |
-          echo "📊 Generating test report..."
-          if [ -d "allure-results" ] && [ "$(ls -A allure-results 2>/dev/null)" ]; then
-            npx allure-commandline generate allure-results --clean -o allure-report || echo "Failed to generate Allure report"
-          else
-            echo "No test results found for report generation"
-            mkdir -p allure-report
-            echo "<html><body><h1>No test results available</h1></body></html>" > allure-report/index.html
-          fi
-
-      - name: Upload test artifacts
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-test-artifacts-${{ github.run_number }}
+          name: android-test-results-${{ github.run_number }}
           path: |
             allure-report/
             allure-results/
             screenshots/
             appium.log
-            test-results/
           retention-days: 30
           if-no-files-found: warn
 
@@ -383,52 +313,37 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Check and prepare test structure
+      - name: Verify test structure
         run: |
-          echo "📁 Checking existing test structure..."
+          echo "📁 Current directory: $(pwd)"
+          echo "📁 Repository structure:"
+          ls -la
           
-          # Create necessary directories
-          mkdir -p apps config
-          
-          # Check test directory
-          if [ -d "test/spec" ] && [ "$(ls -A test/spec/*.js 2>/dev/null)" ]; then
-            echo "✅ Found tests in test/spec/"
-            ls -la test/spec/
-            TEST_DIR="test/spec"
-          elif [ -d "test/specs" ] && [ "$(ls -A test/specs/*.js 2>/dev/null)" ]; then
-            echo "✅ Found tests in test/specs/"
+          echo "📁 Test files:"
+          if [ -d "test/specs" ]; then
+            echo "Found test/specs:"
             ls -la test/specs/
-            TEST_DIR="test/specs"
-          else
-            echo "⚠️ No tests found, creating basic test..."
-            mkdir -p test/specs
-            TEST_DIR="test/specs"
-            
-            cat > test/specs/00.basic.spec.js << 'EOF'
-          describe('Basic iOS Tests', () => {
-              it('should create a session', async () => {
-                  const sessionId = await driver.getSessionId();
-                  console.log('Session ID:', sessionId);
-                  expect(sessionId).toBeDefined();
-              });
-              
-              it('should verify platform', async () => {
-                  const platform = await driver.getPlatformName();
-                  console.log('Platform:', platform);
-                  expect(platform.toLowerCase()).toBe('ios');
-              });
-          });
-          EOF
+          elif [ -d "test/spec" ]; then
+            echo "Found test/spec:"
+            ls -la test/spec/
           fi
           
-          echo "TEST_DIR=$TEST_DIR" >> $GITHUB_ENV
+          mkdir -p apps
+
+      - name: Create/Update configs
+        run: |
+          mkdir -p config
           
-          # Create configs if they don't exist
-          if [ ! -f "config/wdio.shared.conf.js" ]; then
-            cat > config/wdio.shared.conf.js << EOF
+          # Create shared config
+          cat > config/wdio.shared.conf.js << 'EOF'
+          const path = require('path');
+          
           exports.config = {
               runner: 'local',
-              specs: ['./${TEST_DIR}/**/*.js'],
+              specs: [
+                  path.join(process.cwd(), './test/specs/**/*.js'),
+                  path.join(process.cwd(), './test/spec/**/*.js')
+              ],
               exclude: [],
               maxInstances: 1,
               capabilities: [],
@@ -454,23 +369,31 @@ jobs:
               },
               afterTest: async function(test, context, { error, result, duration, passed, retries }) {
                   if (!passed) {
-                      await driver.takeScreenshot();
+                      try {
+                          await driver.takeScreenshot();
+                      } catch (e) {
+                          console.log('Failed to take screenshot:', e.message);
+                      }
                   }
               }
           };
           EOF
-          fi
           
-          if [ ! -f "config/wdio.ios.conf.js" ]; then
-            cat > config/wdio.ios.conf.js << EOF
+          # Create iOS config
+          cat > config/wdio.ios.conf.js << 'EOF'
           const { config } = require('./wdio.shared.conf');
           const path = require('path');
           const fs = require('fs');
           
           config.port = 4723;
-          config.specs = ['${TEST_DIR}/**/*.js'];
           
-          // Determine app path
+          // Set specs with absolute paths
+          config.specs = [
+              path.join(process.cwd(), './test/specs/**/*.js'),
+              path.join(process.cwd(), './test/spec/**/*.js')
+          ];
+          
+          // Check for app
           let appPath = path.join(process.cwd(), './apps/NativeDemoApp.app');
           let capabilities = {};
           
@@ -484,9 +407,10 @@ jobs:
                   'appium:app': appPath,
                   'appium:noReset': true,
                   'appium:newCommandTimeout': 240,
+                  'appium:simulatorStartupTimeout': 120000,
               };
           } else {
-              console.log('No app found, using Safari for testing');
+              console.log('No app found, using Safari');
               capabilities = {
                   platformName: 'iOS',
                   'appium:automationName': 'XCUITest',
@@ -495,19 +419,20 @@ jobs:
                   'appium:bundleId': 'com.apple.mobilesafari',
                   'appium:noReset': true,
                   'appium:newCommandTimeout': 240,
+                  'appium:simulatorStartupTimeout': 120000,
               };
           }
           
           config.capabilities = [capabilities];
           exports.config = config;
           EOF
-          fi
+          
+          # Debug: Show config content
+          echo "📄 Config content:"
+          cat config/wdio.ios.conf.js
 
       - name: Install dependencies
         run: |
-          if [ ! -f "package-lock.json" ]; then
-            rm -rf node_modules
-          fi
           npm install
 
       - name: Setup Appium
@@ -521,84 +446,122 @@ jobs:
         continue-on-error: true
         run: |
           if [ ! -z "${{ env.IOS_APP_URL }}" ]; then
-            echo "📱 Downloading iOS app from: ${{ env.IOS_APP_URL }}"
-            
-            curl -L -f -o apps/app.zip "${{ env.IOS_APP_URL }}" || {
-              echo "⚠️ Failed to download app"
-              rm -f apps/app.zip
-            }
+            echo "📱 Downloading iOS app..."
+            curl -L -o apps/app.zip "${{ env.IOS_APP_URL }}" || echo "Download failed"
             
             if [ -f "apps/app.zip" ]; then
               FILE_SIZE=$(stat -f%z "apps/app.zip" 2>/dev/null || echo "0")
-              echo "Downloaded file size: $FILE_SIZE bytes"
-              
               if [ "$FILE_SIZE" -gt "1000" ]; then
-                unzip -q -o apps/app.zip -d apps/ || echo "Failed to extract"
+                unzip -q -o apps/app.zip -d apps/ || echo "Extract failed"
                 APP_PATH=$(find apps -name "*.app" -type d | head -1)
                 if [ ! -z "$APP_PATH" ]; then
                   mv "$APP_PATH" "apps/NativeDemoApp.app" 2>/dev/null || true
-                  echo "✅ iOS app ready"
                 fi
               fi
             fi
-          else
-            echo "⚠️ No iOS app URL configured"
-            echo "📱 Tests will run with Safari"
           fi
 
       - name: Setup iOS Simulator
         run: |
           echo "📱 Setting up iOS Simulator..."
           
-          RUNTIME=$(xcrun simctl list runtimes | grep iOS | tail -1 | awk '{print $NF}')
-          echo "Runtime: $RUNTIME"
+          # Get available runtimes
+          echo "Available runtimes:"
+          xcrun simctl list runtimes
           
+          # Get the latest iOS runtime
+          RUNTIME=$(xcrun simctl list runtimes | grep iOS | tail -1 | awk '{print $NF}')
+          echo "Using runtime: $RUNTIME"
+          
+          # Delete existing simulator if exists
           xcrun simctl delete "iPhone 14" 2>/dev/null || true
+          
+          # Create new simulator
           DEVICE_ID=$(xcrun simctl create "iPhone 14" "iPhone 14" "$RUNTIME")
-          echo "Device ID: $DEVICE_ID"
+          echo "Created device: $DEVICE_ID"
           echo "DEVICE_ID=$DEVICE_ID" >> $GITHUB_ENV
           
+          # Boot the simulator
           xcrun simctl boot "$DEVICE_ID"
+          
+          # Wait for boot
+          echo "Waiting for simulator to boot..."
           xcrun simctl bootstatus "$DEVICE_ID" || true
+          
+          # List booted devices
+          echo "Booted devices:"
+          xcrun simctl list devices | grep Booted
 
       - name: Run iOS Tests
         run: |
           echo "📱 Starting iOS tests..."
-          echo "📋 Test files:"
-          find ${TEST_DIR:-test/specs} -name "*.js" -type f | sort || echo "No tests found"
+          echo "📁 Working directory: $(pwd)"
+          echo "📁 Test files found:"
+          find test -name "*.spec.js" -type f 2>/dev/null | head -10
           
           # Start Appium
+          echo "🚀 Starting Appium server..."
           appium --address 127.0.0.1 --port 4723 --relaxed-security > appium.log 2>&1 &
           APPIUM_PID=$!
           
-          # Wait for Appium
+          # Wait for Appium to be ready
           echo "⏳ Waiting for Appium..."
-          for i in {1..30}; do
-            if curl -s http://127.0.0.1:4723/status | grep -q '"ready":true'; then
-              echo "✅ Appium ready!"
+          MAX_ATTEMPTS=30
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            if curl -s http://127.0.0.1:4723/status | grep -q "ready.*true"; then
+              echo "✅ Appium is ready!"
               break
             fi
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "   Waiting... attempt $ATTEMPT/$MAX_ATTEMPTS"
             sleep 2
           done
           
+          # Verify Appium is running
+          if ! curl -s http://127.0.0.1:4723/status | grep -q "ready.*true"; then
+            echo "❌ Appium failed to start"
+            cat appium.log | tail -50
+            exit 1
+          fi
+          
+          # Show Appium status
+          echo "📊 Appium status:"
+          curl -s http://127.0.0.1:4723/status | python3 -m json.tool || true
+          
+          # Debug WebdriverIO config
+          echo "🔍 Checking WebdriverIO configuration..."
+          echo "Current directory: $(pwd)"
+          echo "Test specs pattern:"
+          node -e "console.log(require('./config/wdio.ios.conf').config.specs)"
+          
           # Run tests
+          echo "🧪 Running tests with command: npm run test:ios"
           npm run test:ios || TEST_EXIT=$?
           
           # Cleanup
           kill $APPIUM_PID 2>/dev/null || true
           
+          # Show results
+          if [ "${TEST_EXIT:-0}" -eq 0 ]; then
+            echo "✅ Tests passed!"
+          else
+            echo "❌ Tests failed with exit code: ${TEST_EXIT:-1}"
+            echo "📋 Last Appium logs:"
+            tail -30 appium.log || true
+          fi
+          
           exit ${TEST_EXIT:-0}
 
-      - name: Upload test artifacts
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ios-test-artifacts-${{ github.run_number }}
+          name: ios-test-results-${{ github.run_number }}
           path: |
             allure-report/
             allure-results/
             screenshots/
             appium.log
-            test-results/
           retention-days: 30
           if-no-files-found: warn
