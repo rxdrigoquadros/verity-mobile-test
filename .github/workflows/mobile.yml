@@ -1,3 +1,4 @@
+# .github/workflows/mobile-tests.yml
 name: Mobile Automation Tests
 
 on:
@@ -10,6 +11,7 @@ on:
 env:
   NODE_VERSION: '20'
   JAVA_VERSION: '11'
+  APPIUM_VERSION: '2.11.3'  # Versão estável do Appium 2
 
 jobs:
   test-android:
@@ -33,21 +35,28 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # Use npm install instead of npm ci to regenerate lock file
+          # Clean install
+          rm -rf node_modules package-lock.json
           npm install
           
-      - name: Setup Appium
+      - name: Setup Appium with compatible drivers
         run: |
-          npm install -g appium@^2.11.0
-          appium driver list --installed || true
-          appium driver update uiautomator2 || appium driver install uiautomator2
+          # Install specific Appium version
+          npm install -g appium@${{ env.APPIUM_VERSION }}
+          
+          # Verify Appium version
+          appium --version
+          
+          # Install compatible driver versions
+          appium driver install uiautomator2@2.45.1
+          
+          # List installed drivers
+          appium driver list --installed
 
       - name: Download Android app
         run: |
           mkdir -p apps
-          if [ ! -f "apps/Android-NativeDemoApp-0.4.0.apk" ]; then
-            wget https://github.com/webdriverio/native-demo-app/releases/download/v1.0.8/Android-NativeDemoApp-0.4.0.apk -P apps/
-          fi
+          wget -q https://github.com/webdriverio/native-demo-app/releases/download/v1.0.8/Android-NativeDemoApp-0.4.0.apk -P apps/
 
       - name: Setup Android Emulator
         uses: reactivecircus/android-emulator-runner@v2
@@ -60,11 +69,19 @@ jobs:
           disable-animations: true
           script: |
             # Start Appium server
-            appium --log-timestamp --log-no-colors > appium.log 2>&1 &
-            sleep 10
+            appium --allow-insecure chromedriver_autodownload > appium.log 2>&1 &
             
-            # Check if Appium is running
-            curl -s http://127.0.0.1:4723/status || echo "Appium not responding"
+            # Wait for Appium to start
+            timeout=30
+            while [ $timeout -gt 0 ]; do
+              if curl -s http://127.0.0.1:4723/status | grep -q '"ready":true'; then
+                echo "Appium is ready!"
+                break
+              fi
+              echo "Waiting for Appium... ($timeout seconds left)"
+              sleep 1
+              timeout=$((timeout - 1))
+            done
             
             # Run tests
             npm run test:android || echo "Tests completed with status $?"
@@ -72,7 +89,13 @@ jobs:
       - name: Generate Allure Report
         if: always()
         run: |
-          npx allure-commandline generate allure-results --clean -o allure-report || echo "Report generation failed"
+          if [ -d "allure-results" ]; then
+            npx allure-commandline generate allure-results --clean -o allure-report
+          else
+            echo "No test results found"
+            mkdir -p allure-report
+            echo "<html><body><h1>No test results available</h1></body></html>" > allure-report/index.html
+          fi
 
       - name: Upload test artifacts
         if: always()
@@ -101,46 +124,77 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # Use npm install instead of npm ci to regenerate lock file
+          # Clean install
+          rm -rf node_modules package-lock.json
           npm install
 
-      - name: Setup Appium
+      - name: Setup Appium with compatible drivers
         run: |
-          npm install -g appium@^2.11.0
-          appium driver list --installed || true
-          appium driver update xcuitest || appium driver install xcuitest
+          # Install specific Appium version
+          npm install -g appium@${{ env.APPIUM_VERSION }}
+          
+          # Verify Appium version
+          appium --version
+          
+          # Install compatible driver version
+          appium driver install xcuitest@4.35.0
+          
+          # List installed drivers
+          appium driver list --installed
 
       - name: Download iOS app
         run: |
           mkdir -p apps
-          if [ ! -f "apps/iOS-Simulator-NativeDemoApp-0.4.0.app.zip" ]; then
-            wget https://github.com/webdriverio/native-demo-app/releases/download/v1.0.8/iOS-Simulator-NativeDemoApp-0.4.0.app.zip -P apps/
-            unzip apps/iOS-Simulator-NativeDemoApp-0.4.0.app.zip -d apps/
-          fi
+          wget -q https://github.com/webdriverio/native-demo-app/releases/download/v1.0.8/iOS-Simulator-NativeDemoApp-0.4.0.app.zip -P apps/
+          unzip -q apps/iOS-Simulator-NativeDemoApp-0.4.0.app.zip -d apps/
 
       - name: Setup iOS Simulator
         run: |
-          # List available devices
-          xcrun simctl list devices
+          # Get available runtimes
+          xcrun simctl list runtimes
           
-          # Create simulator if not exists
-          xcrun simctl create "iPhone 14 Test" "iPhone 14" iOS16.4 || echo "Simulator already exists"
+          # Get available device types
+          xcrun simctl list devicetypes
+          
+          # Create simulator with available runtime
+          RUNTIME=$(xcrun simctl list runtimes | grep iOS | tail -1 | awk '{print $NF}')
+          DEVICE_TYPE="iPhone 14"
+          
+          echo "Creating simulator with runtime: $RUNTIME"
+          xcrun simctl create "Test iPhone" "$DEVICE_TYPE" "$RUNTIME" || echo "Simulator might already exist"
+          
+          # Get device ID
+          DEVICE_ID=$(xcrun simctl list devices | grep "Test iPhone" | grep -oE '[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}' | head -1)
+          
+          if [ -z "$DEVICE_ID" ]; then
+            echo "Using first available iPhone simulator"
+            DEVICE_ID=$(xcrun simctl list devices | grep iPhone | grep -oE '[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}' | head -1)
+          fi
+          
+          echo "Device ID: $DEVICE_ID"
           
           # Boot simulator
-          DEVICE_ID=$(xcrun simctl list devices | grep "iPhone 14 Test" | grep -oE '[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}' | head -1)
-          xcrun simctl boot $DEVICE_ID || echo "Simulator already booted"
+          xcrun simctl boot "$DEVICE_ID" || echo "Simulator already booted"
           
-          # Wait for simulator
-          xcrun simctl bootstatus $DEVICE_ID || true
+          # Wait for boot
+          xcrun simctl bootstatus "$DEVICE_ID" || true
 
       - name: Start Appium and run tests
         run: |
           # Start Appium server
-          appium --log-timestamp --log-no-colors > appium.log 2>&1 &
-          sleep 10
+          appium --allow-insecure chromedriver_autodownload > appium.log 2>&1 &
           
-          # Check if Appium is running
-          curl -s http://127.0.0.1:4723/status || echo "Appium not responding"
+          # Wait for Appium to start
+          timeout=30
+          while [ $timeout -gt 0 ]; do
+            if curl -s http://127.0.0.1:4723/status | grep -q '"ready":true'; then
+              echo "Appium is ready!"
+              break
+            fi
+            echo "Waiting for Appium... ($timeout seconds left)"
+            sleep 1
+            timeout=$((timeout - 1))
+          done
           
           # Run tests
           npm run test:ios || echo "Tests completed with status $?"
@@ -148,7 +202,13 @@ jobs:
       - name: Generate Allure Report
         if: always()
         run: |
-          npx allure-commandline generate allure-results --clean -o allure-report || echo "Report generation failed"
+          if [ -d "allure-results" ]; then
+            npx allure-commandline generate allure-results --clean -o allure-report
+          else
+            echo "No test results found"
+            mkdir -p allure-report
+            echo "<html><body><h1>No test results available</h1></body></html>" > allure-report/index.html
+          fi
 
       - name: Upload test artifacts
         if: always()
@@ -214,11 +274,7 @@ jobs:
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>Mobile Test Reports</title>
                 <style>
-                    * {
-                        margin: 0;
-                        padding: 0;
-                        box-sizing: border-box;
-                    }
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
                     body { 
                         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -236,56 +292,22 @@ jobs:
                         padding: 40px;
                         box-shadow: 0 20px 60px rgba(0,0,0,0.3);
                     }
-                    h1 { 
-                        color: #333;
-                        margin-bottom: 10px;
-                        font-size: 28px;
-                    }
-                    .subtitle {
-                        color: #666;
-                        margin-bottom: 30px;
-                        font-size: 14px;
-                    }
-                    .status-card {
+                    h1 { color: #333; margin-bottom: 10px; font-size: 28px; }
+                    .status { 
                         padding: 20px;
                         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                         border-radius: 12px;
                         color: white;
-                        margin-bottom: 20px;
-                    }
-                    .info-grid {
-                        display: grid;
-                        grid-template-columns: repeat(2, 1fr);
-                        gap: 15px;
-                        margin-top: 20px;
-                    }
-                    .info-item {
-                        padding: 15px;
-                        background: #f8f9fa;
-                        border-radius: 8px;
-                        border-left: 3px solid #667eea;
+                        margin: 20px 0;
                     }
                 </style>
             </head>
             <body>
                 <div class="container">
-                    <h1>📱 Mobile Automation</h1>
-                    <p class="subtitle">Test Reports Dashboard</p>
-                    
-                    <div class="status-card">
-                        <h3>⏳ Relatório em Processamento</h3>
-                        <p>O relatório será disponibilizado após a execução dos testes.</p>
-                    </div>
-                    
-                    <div class="info-grid">
-                        <div class="info-item">
-                            <strong>Branch</strong>
-                            <span>main</span>
-                        </div>
-                        <div class="info-item">
-                            <strong>Status</strong>
-                            <span>🔄 Processing</span>
-                        </div>
+                    <h1>📱 Mobile Test Reports</h1>
+                    <div class="status">
+                        <h3>Report Status</h3>
+                        <p>Test execution completed. Check workflow logs for details.</p>
                     </div>
                 </div>
             </body>
