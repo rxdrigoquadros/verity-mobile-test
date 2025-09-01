@@ -1,15 +1,17 @@
+// config/wdio.ios.conf.js
 const { config } = require('./wdio.shared.conf');
 const path = require('path');
 
-config.specs = ['./test/specs/**/*.js'];
+config.port = 4723;
 
 config.capabilities = [{
     platformName: 'iOS',
-    'appium:deviceName': 'iPhone 14',
-    'appium:platformVersion': '16.0',
     'appium:automationName': 'XCUITest',
-    'appium:app': path.join(process.cwd(), './apps/iOS-Simulator-NativeDemoApp-0.4.0.app'),
-    'appium:newCommandTimeout': 240
+    'appium:deviceName': 'iPhone 14 Test',
+    'appium:platformVersion': '16.4', // Ajuste conforme necessário
+    'appium:app': path.join(process.cwd(), './apps/NativeDemoApp.app'),
+    'appium:noReset': true,
+    'appium:newCommandTimeout': 240,
 }];
 
 exports.config = config;

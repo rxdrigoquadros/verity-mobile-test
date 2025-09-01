@@ -1,16 +1,19 @@
+// config/wdio.android.conf.js
 const { config } = require('./wdio.shared.conf');
 const path = require('path');
 
-config.specs = ['./test/specs/**/*.js'];
+config.port = 4723;
 
 config.capabilities = [{
     platformName: 'Android',
-    'appium:deviceName': 'Android Emulator',
-    'appium:platformVersion': '13.0',
     'appium:automationName': 'UiAutomator2',
+    'appium:deviceName': 'emulator-5554',
+    'appium:platformVersion': '10.0',
     'appium:app': path.join(process.cwd(), './apps/Android-NativeDemoApp-0.4.0.apk'),
-    'appium:appWaitActivity': 'com.wdiodemoapp.MainActivity',
-    'appium:newCommandTimeout': 240
+    'appium:noReset': true,
+    'appium:newCommandTimeout': 240,
+    'appium:skipServerInstallation': true,
+    'appium:skipDeviceInitialization': true,
 }];
 
 exports.config = config;
